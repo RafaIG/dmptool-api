@@ -6,11 +6,13 @@ from aplicacion import config
 from werkzeug.utils import secure_filename
 from flask_login import LoginManager, login_user, logout_user, login_required,\
     current_user
-import os
-import json
 from bson import ObjectId
 from flask_pymongo import PyMongo, ObjectId
 from flask_cors import CORS, cross_origin
+import os
+import json
+import logging
+import requests
 
 ## Initialize
 app = Flask(__name__)
@@ -19,9 +21,15 @@ app.config.from_object(config)
 cors = CORS(app)
 mongo = PyMongo(app)
 db = SQLAlchemy(app)
+
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = "login"
+
+logging.basicConfig(filename='log/error.log',
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(name)s %(threadName)s : %(message)s'
+    )
 
 class JSONEncoder(json.JSONEncoder):
     def default(self, o):
@@ -43,10 +51,26 @@ def start():
 
 ########## login part ##########
 
+@app.route('/loginprueba')
+def loginprueba():
+    try:
+        username=request.authorization["username"]
+        password=request.authorization["password"]
+    except Exception as e:
+            print(e)
+            return jsonify(error="Unauthenticated. Not basic auth send with username or password."), 401
+
+    from aplicacion.models import Users, Projects
+    user = Users.query.filter_by(username=username).first()
+    if user is not None and user.verify_password(password):
+        session.permanent = True
+        login_user(user)
+    return "Works"
+
 @app.route('/login')
 def login():
-    if current_user.is_authenticated:
-        return jsonify(message="User already logged: " + current_user.username)
+    # if current_user.is_authenticated:
+    #     return jsonify(message="User already logged: " + current_user.username)
 
     try:
         username=request.authorization["username"]
@@ -60,19 +84,32 @@ def login():
     if user is not None and user.verify_password(password):
         session.permanent = True
         login_user(user)
+        print(current_user)
 
-        userproject = Projects.query.filter(Projects.users.any(id=user.id)).all()
-        nameprojects=""
-        for i,project in enumerate(userproject):
-            nameprojects+=project.name
-            if i < len(userproject) - 1:
-                nameprojects+=","
+        # userprojects = Projects.query.filter(Projects.users.any(id=user.id)).all()
+        # nameprojects=""
+        # for i,project in enumerate(userprojects):
+        #     nameprojects+=project.name
+        #     if i < len(userproject) - 1:
+        #         nameprojects+=","
+        userproject = Projects.query.filter(Projects.users.any(id=user.id)).first()
 
-        return jsonify(
+        url = "http://127.0.0.1:5000/loginprueba"
+        headers = {
+          'Authorization': 'Basic UHJ1ZWJhOjEyMw=='
+        }
+        prueba = requests.request("GET", url, headers=headers)
+        print(prueba)
+
+        response = jsonify(
                 username=username,
                 email=user.email,
-                project=nameprojects
+                project=userproject.name,
+                projectdescription=userproject.description,
+                cookie=prueba.cookies.get('session'),
+                set_cookie=prueba.headers.get('set-cookie')
                 )
+        return response
     else:
         return jsonify(error="Unauthenticated. Error in log in."), 401
 
@@ -110,11 +147,8 @@ def changepassword():
 def get_all_dmps():
     dmps = mongo.db.dmps.find()
     output = []
-
     for dmp in dmps:
         output.append(dmp)
-
-    print (output)
     return JSONEncoder().encode(output)
 
 #{ "user":"esteban","project":"street-spectra", "purpose":"collection of elements", "sharing":yes, "license":"cc-by"}
@@ -196,7 +230,7 @@ def load_user(user_id):
 
 @login_manager.unauthorized_handler
 def unauthorized():
-    return jsonify({'error':"Unauthorized. You need to log in first."})
+    return jsonify({'error':"Unauthorized. You need to log in first."}), 404
 
 @app.errorhandler(404)
 def page_not_found(error):
